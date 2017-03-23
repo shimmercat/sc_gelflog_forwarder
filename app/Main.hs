@@ -7,17 +7,18 @@ import           Data.Word                                               (Word16
 import           Data.Conduit
 import qualified Data.Conduit.List                                       as DCL
 import           Control.Lens
+import           Control.Monad.IO.Class                                  (liftIO)
 import qualified Data.ByteString                                         as B
 import qualified Data.ByteString.Lazy                                    as LB
 import qualified Data.ByteString.Builder                                 as Bu
 import qualified Data.ByteString.Char8                                   as B8
 import           Data.Semigroup                                          ((<>))
-import           Control.Applicative                                     ( (<|>) )
+import           Control.Applicative                                     ( (<|>), (<**>) )
 import qualified Options.Applicative                                     as OA
 import qualified Network.Socket                                          as NS
-
-import qualified Database.Redis                                   as R
-import qualified Data.Attoparsec.ByteString.Char8                 as ATO
+import qualified Network.Socket.ByteString                               as NSB
+import qualified Database.Redis                                          as R
+import qualified Data.Attoparsec.ByteString.Char8                        as ATO
 
 
 import           Lib
@@ -37,17 +38,17 @@ makeLenses ''AppConfig
 
 
 
-appConfig :: Parser AppConfig
-appConfig = Parser <$>
-    ( (representationToRedisConnectInfo . parseNetworkAddressRepresentation . B8.pack )  <$> strOption (
-         long    "redis"
-      <> metavar "REDIS"
-      <> help    "Redis connection place"
+appConfig :: OA.Parser AppConfig
+appConfig = AppConfig <$>
+    ( (representationToRedisConnectInfo . parseNetworkAddressRepresentation . B8.pack )  <$> OA.strOption (
+         OA.long    "redis"
+      <> OA.metavar "REDIS"
+      <> OA.help    "Redis connection place"
         ))
-    <*> ( (parseNetworkAddressRepresentation . B8.pack ) <$> strOption (
-         long    "graylog"
-      <> metavar "GRAYLOG"
-      <> help    "Where graylog listens"
+    <*> ( (parseNetworkAddressRepresentation . B8.pack ) <$> OA.strOption (
+         OA.long    "graylog"
+      <> OA.metavar "GRAYLOG"
+      <> OA.help    "Where graylog listens"
         ))
 
 
@@ -57,17 +58,17 @@ subscribeLogPump = error "NIY: subscribeLogPump"
 
 
 -- | Pumps messages out as UDP datagrams
-publishLogPump :: NS.Socket -> NS.SockAddr -> Sink B.ByteString IO
+publishLogPump :: NS.Socket -> NS.SockAddr -> Sink B.ByteString IO ()
 publishLogPump s addr = do
     maybe_data_to_send <- await
     case maybe_data_to_send of
         Nothing -> return ()
         Just datum -> do
-           liftIO $ NS.sendAllTo s datum addr
+           liftIO $ NSB.sendAllTo s datum addr
            publishLogPump s addr
 
 
-translateMessage :: LogEntryWorker -> [B.ByteString]
+translateMessage :: LogEntryWithWorker -> [B.ByteString]
 translateMessage = error "NIY: translateMessage"
 
 
@@ -75,18 +76,22 @@ translateMessage = error "NIY: translateMessage"
 -- | Does the actual work
 transportMessages :: AppConfig -> IO ()
 transportMessages app_config =
-      subscribeLogPump (app_config ^. redisConnectInfo_AC)
-      =$=
-      DCL.mapFoldable translateMessage
-      $$
-      publishLogPump sock sock_addr
+  do
+    sock_addr <- representationToSocketAddress (app_config ^. graylogHost_AC )
+    sock <- NS.socket NS.AF_INET NS.Datagram NS.defaultProtocol
+    (
+        subscribeLogPump (app_config ^. redisConnectInfo_AC)
+        =$=
+        DCL.mapFoldable translateMessage
+        $$
+        publishLogPump sock sock_addr )
 
 
 main :: IO ()
-main = transportMessages =<< execParser opts
+main = transportMessages =<< OA.execParser opts
   where
-    opts  = info ( appConfig <**> helper)
-                 ( fullDesc
-                   <> progDesc "Transports log messages from Redis to Graylog"
-                   <> header   "the-henrik: a program to copy ShimmerCat messages"
+    opts  = OA.info ( appConfig <**> OA.helper)
+                 ( OA.fullDesc
+                   <> OA.progDesc "Transports log messages from Redis to Graylog"
+                   <> OA.header   "the-henrik: a program to copy ShimmerCat messages"
                  )

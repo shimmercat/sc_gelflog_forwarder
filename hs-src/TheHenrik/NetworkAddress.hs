@@ -47,10 +47,8 @@ data NetworkAddressRepresentation =
      -- | An unresolved host name, and a port. Always
      --   acceptable
    |  HostName_NAR !B.ByteString !Word16
-#ifndef WIN32
    | UnixSocket_NAR !B.ByteString
    | SocketFD_NAR !Word16
-#endif
      deriving (Eq,Generic, Ord)
 
 
@@ -59,10 +57,9 @@ instance Cereal.Serialize NetworkAddressRepresentation
 
 mustCreateSocket :: NetworkAddressRepresentation -> Bool
 mustCreateSocket (IpV4_NAR _ _) = True
-#ifndef WIN32
 mustCreateSocket (UnixSocket_NAR _) = True
 mustCreateSocket (SocketFD_NAR _) = False
-#endif
+
 
 
 instance Show NetworkAddressRepresentation where
@@ -71,12 +68,11 @@ instance Show NetworkAddressRepresentation where
 
     show (HostName_NAR hn port) =
        "lookup(" `mappend` (show hn) `mappend` "):" `mappend` show port
-#ifndef WIN32
     show (UnixSocket_NAR bs) =
       (showString "unix://") . (showString . unpack $ bs) $ ""
     show (SocketFD_NAR w16) =
       (showString "socket-fd://") . (showString . show $ w16) $ ""
-#endif
+
 
 
 -- | Used for some invalid email address I must trafique
@@ -141,13 +137,11 @@ parseNetworkAddressRepresentation s =
               in HostName_NAR hostname port
 
            -- Continues below, with the ifndef windows address parsing
-#ifndef WIN32
-           _ -> parse3
-#else
-           _ -> error  $ "Network address  " ++ (unpack s) ++ " is at least win32invalid"
-#endif
 
-#ifndef WIN32
+           _ -> parse3
+
+           _ -> error  $ "Network address  " ++ (unpack s) ++ " is at least win32invalid"
+
     parse3 =  case Rb.execute v3 s of
         Right (Just arr) ->
           let
@@ -168,7 +162,7 @@ parseNetworkAddressRepresentation s =
 
         _ ->
           error $ "Unfortunate network address spec " ++ (unpack s)
-#endif
+
   in {-# SCC parseNetAddress #-} case Rb.execute v1 s of
       Right (Just arr) ->
         let
@@ -230,12 +224,10 @@ representationToSocketAddress nar =
                   host_address <- return $ NS.addrAddress addr_info1
                   return host_address
 
-#ifndef WIN32
        UnixSocket_NAR bs ->
            return $ NS.SockAddrUnix . unpack $ bs
        _ ->
            error "CantConvertThatToSocket"
-#endif
 
 
 socketAddressToFamily :: NS.SockAddr -> NS.Family
@@ -249,10 +241,10 @@ combineWord8ToStrIpAddr :: (Word8, Word8, Word8, Word8) -> String
 combineWord8ToStrIpAddr (a,b,c,d) = (show a) ++ "." ++ (show b) ++ "." ++ (show c) ++ "." ++ (show d)
 
 
-
 -- | All the steps into one
 parseNetworkAddress :: B.ByteString ->  IO NS.SockAddr
 parseNetworkAddress  = representationToSocketAddress .  parseNetworkAddressRepresentation
+
 
 representationToRedisConnectInfo :: NetworkAddressRepresentation -> Re.ConnectInfo
 representationToRedisConnectInfo _nar@(IpV4_NAR ip port) =  Re.defaultConnectInfo {
@@ -263,10 +255,8 @@ representationToRedisConnectInfo (HostName_NAR hostname port) = Re.defaultConnec
     Re.connectHost =unpack hostname,
     Re.connectPort = Re.PortNumber $  fromIntegral port
     }
-#ifndef WIN32
 representationToRedisConnectInfo (UnixSocket_NAR path) = Re.defaultConnectInfo {
     Re.connectHost = "",
     Re.connectPort = Re.UnixSocket $ unpack path
     }
 representationToRedisConnectInfo _ = error "Can'tTranslateForRedis"
-#endif
