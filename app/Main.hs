@@ -3,8 +3,12 @@
 module           Main where
 
 
+import           System.IO
 import           Data.Word                                               (Word16)
 import           Data.Conduit
+import qualified Control.Concurrent                                      as CC
+import qualified Control.Exception                                       as E
+import           Control.Concurrent.Chan
 import qualified Data.Conduit.List                                       as DCL
 import           Control.Lens
 import           Control.Monad.IO.Class                                  (liftIO)
@@ -12,6 +16,7 @@ import qualified Data.ByteString                                         as B
 import qualified Data.ByteString.Lazy                                    as LB
 import qualified Data.ByteString.Builder                                 as Bu
 import qualified Data.ByteString.Char8                                   as B8
+import qualified Data.Serialize                                          as Ce
 import           Data.Semigroup                                          ((<>))
 import           Control.Applicative                                     ( (<|>), (<**>) )
 import qualified Options.Applicative                                     as OA
@@ -54,7 +59,53 @@ appConfig = AppConfig <$>
 
 -- | Pumps messages out from Redis
 subscribeLogPump :: R.ConnectInfo -> Source IO LogEntryWithWorker
-subscribeLogPump = error "NIY: subscribeLogPump"
+subscribeLogPump conn_info =
+  do
+    ch <- liftIO $ do
+        conn <-  R.connect conn_info
+        let
+            -- TODO: Add capability for specifying a namespace
+            channel_aspect = "sc_log_" `mappend` "*"
+            ps = R.psubscribe [channel_aspect]
+        fetch_failed <- CC.newMVar False
+        ch <- newChan
+
+        -- Receive and queue the messages on an independen thread, so to
+        -- not block the thread on UDP sends
+        CC.forkIO $ E.onException (do
+                R.runRedis conn . R.pubSub ps $ \ msg -> do
+                    let
+                        msgbs = case msg of
+                            (R.Message _ m) -> m
+                            (R.PMessage _ _ m) -> m
+                        entry_wo = Ce.decode  msgbs :: Either String LogEntryWithWorker
+                    case entry_wo of
+                         Left _err -> do
+                             -- Silently ignoring decoding errors
+                             liftIO $ putStrLn "(log-decoding error ignored)"
+                             return ()
+                         Right wo -> do
+                             writeChan ch wo
+                    return mempty
+            )
+            (CC.modifyMVar_ fetch_failed $ \ _ -> return True )
+        return ch
+
+    -- Here, just read from the chan
+    log_pump ch
+  where
+    log_pump :: Chan LogEntryWithWorker -> Source IO LogEntryWithWorker
+    log_pump ch = do
+        either_e_leww <- liftIO $ E.try (readChan ch)
+        case either_e_leww :: Either E.BlockedIndefinitelyOnMVar LogEntryWithWorker  of
+            Left e -> do
+                liftIO $ hPutStr stderr "ConnectionToSourceOfMessagesWentDown"
+                return ()
+            Right leww -> do
+                yield leww
+                log_pump ch
+
+
 
 
 -- | Pumps messages out as UDP datagrams
@@ -69,8 +120,7 @@ publishLogPump s addr = do
 
 
 translateMessage :: LogEntryWithWorker -> [B.ByteString]
-translateMessage = error "NIY: translateMessage"
-
+translateMessage = map LB.toStrict .  toChunkedUDPMessage
 
 
 -- | Does the actual work
