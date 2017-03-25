@@ -106,8 +106,6 @@ subscribeLogPump conn_info =
                 log_pump ch
 
 
-
-
 -- | Pumps messages out as UDP datagrams
 publishLogPump :: NS.Socket -> NS.SockAddr -> Sink B.ByteString IO ()
 publishLogPump s addr = do
@@ -119,8 +117,10 @@ publishLogPump s addr = do
            publishLogPump s addr
 
 
-translateMessage :: LogEntryWithWorker -> [B.ByteString]
-translateMessage = map LB.toStrict .  toChunkedUDPMessage
+translateMessage :: LogEntryWithWorker -> IO [B.ByteString]
+translateMessage leww = do
+     chm <- toChunkedUDPMessage leww
+     return $ map LB.toStrict chm
 
 
 -- | Does the actual work
@@ -132,7 +132,7 @@ transportMessages app_config =
     (
         subscribeLogPump (app_config ^. redisConnectInfo_AC)
         =$=
-        DCL.mapFoldable translateMessage
+        DCL.mapFoldableM translateMessage
         $$
         publishLogPump sock sock_addr )
 
