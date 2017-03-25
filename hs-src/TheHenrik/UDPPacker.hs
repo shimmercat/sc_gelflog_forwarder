@@ -89,14 +89,17 @@ maybeRead s =
 additionalFields :: Word16 -> [Bu.Builder] -> [(T.Text, Ae.Value)]
 additionalFields code builders = let
     field_name  i = T.pack $ "_M" ++ show code ++ "_" ++ show i
-    encode_value :: String -> Ae.Value
+    encode_value :: B.ByteString -> Ae.Value
     encode_value s
-       | (Just real_num::Maybe Double ) <- maybeRead s =  Ae.Number . realToFrac $ real_num
+       | (Just real_num::Maybe Double ) <- maybeRead . B8.unpack $ s
+                             =  Ae.Number . realToFrac $ real_num
+       | otherwise
+                             =  Ae.String . DTE.decodeUtf8 $ s 
 
 
   in
     [
-      (field_name i, encode_value . B8.unpack . LB.toStrict . Bu.toLazyByteString $ bu ) |
+      (field_name i, encode_value  . LB.toStrict . Bu.toLazyByteString $ bu ) |
          (i, bu) <- zip [0..] builders
     ]
 
